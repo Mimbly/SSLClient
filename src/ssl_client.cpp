@@ -140,6 +140,8 @@ static int client_net_send( void *ctx, const unsigned char *buf, size_t len ) {
 
 void ssl_init(sslclient_context *ssl_client, Client *client)
 {
+    // reset embedded pointers to zero
+    memset(ssl_client, 0, sizeof(sslclient_context));
     log_v("Init SSL");
     ssl_client->client = client;
     mbedtls_ssl_init(&ssl_client->ssl_ctx);
@@ -250,6 +252,7 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
         ret = mbedtls_pk_parse_key(&ssl_client->client_key, (const unsigned char *)cli_key, strlen(cli_key) + 1, NULL, 0);
 
         if (ret != 0) {
+            mbedtls_x509_crt_free(&ssl_client->client_cert); // cert+key are free'd in pair
             return handle_error(ret);
         }
 
@@ -300,7 +303,7 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
         bzero(buf, sizeof(buf));
         mbedtls_x509_crt_verify_info(buf, sizeof(buf), "  ! ", flags);
         log_e("Failed to verify peer certificate! verification info: %s", buf);
-        stop_ssl_socket(ssl_client, rootCABuff, cli_cert, cli_key);  //It's not safe continue.
+        //stop_ssl_socket(ssl_client, rootCABuff, cli_cert, cli_key);  //It's not safe continue.
         return handle_error(ret);
     } else {
         log_v("Certificate verified.");
@@ -316,7 +319,7 @@ int start_ssl_client(sslclient_context *ssl_client, const char *host, uint32_t p
 
     if (cli_key != NULL) {
         mbedtls_pk_free(&ssl_client->client_key);
-    }    
+    }
 
     log_v("Free internal heap after TLS %u", ESP.getFreeHeap());
 
@@ -329,7 +332,16 @@ void stop_ssl_socket(sslclient_context *ssl_client, const char *rootCABuff, cons
 {
     log_v("Cleaning SSL connection.");
 
-    ssl_client->client->stop();
+    //ssl_client->client->stop();
+
+    // avoid memory leak if ssl connection attempt failed
+    if (ssl_client->ssl_conf.ca_chain != NULL) {
+        mbedtls_x509_crt_free(&ssl_client->ca_cert);
+    }
+    if (ssl_client->ssl_conf.key_cert != NULL) {
+        mbedtls_x509_crt_free(&ssl_client->client_cert);
+        mbedtls_pk_free(&ssl_client->client_key);
+    }
 
     mbedtls_ssl_free(&ssl_client->ssl_ctx);
     mbedtls_ssl_config_free(&ssl_client->ssl_conf);
